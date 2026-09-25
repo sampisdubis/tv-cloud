@@ -1,24 +1,37 @@
-"""Cloud slika javnog TradingView charta BEZ logina.
-Otvara javni chart BINANCE:BTCUSDT 4H, pokusava da doda javni indikator
-Auto Harmonic Patterns V2, slika i salje na Telegram.
+"""Cloud slika TV charta SA prijavom (kolacici).
+Otvara TVOJ sacuvani layout (vec ima HP V2 sa tvojim inputs podesavanjima),
+saceka da se iscrta, slika i salje na Telegram.
 
-Token i chat id dolaze iz env varijabli (GitHub Secrets):
-  TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
-Lokalno testiranje: python cloud_tv_shot.py (slika se sacuva, slanje samo ako ima env).
+Secrets (GitHub -> Settings -> Secrets -> Actions):
+  TELEGRAM_TOKEN, TELEGRAM_CHAT_ID - bot za slanje
+  TV_SESSIONID, TV_SESSIONID_SIGN - kolacici sa tvog browsera (tvoja prijava)
+  LAYOUT_URL (opciono) - link tvog charta
+
+Vazno: vrednosti kolacica se nikad ne salju u chat, samo se nalepe u Secrets.
 """
 import datetime
 import os
 import sys
 import time
+import urllib.parse
 import urllib.request
 
-CHART_URL = "https://www.tradingview.com/chart/?symbol=BINANCE%3ABTCUSDT&interval=240"
-INDICATOR_NAME = "Auto Harmonic Patterns V2"
+LAYOUT_URL = (os.environ.get("LAYOUT_URL", "").strip()
+              or "https://www.tradingview.com/chart/LbQ2BN3G/?symbol=BINANCE%3ABTCUSDT&interval=240")
 OUT_PNG = "tv_cloud.png"
 
 
 def log(msg):
     print(msg, flush=True)
+
+
+def send_text(token, chat_id, text):
+    url = "https://api.telegram.org/bot%s/sendMessage" % token
+    data = urllib.parse.urlencode(
+        {"chat_id": chat_id, "text": text[:900]}).encode("utf-8")
+    req = urllib.request.Request(url, data=data)
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.status
 
 
 def send_telegram(token, chat_id, photo_path, caption):
@@ -61,151 +74,47 @@ def dismiss_popups(page):
         log("popup dismiss preskocen: %s" % str(e)[:100])
 
 
-def try_add_indicator(page):
-    """Pokusa da doda HP V2 preko Indicators menija. Ako ne uspe, vrati False
-    pa se svejedno slika prazan chart (da korisnik vidi da sistem radi)."""
+def is_login_wall(page):
+    """Proveri da li nas je TradingView bacio na prijavu (kolacic istekao)."""
     try:
-        # Dijagnostika: ispisi dugmad koja lice na Indicators da vidimo pravi naziv
-        try:
-            dump = page.evaluate("""(function(){
-              var out=[];
-              var els=document.querySelectorAll('button,[aria-label],[title],[data-name]');
-              for(var i=0;i<els.length && out.length<20;i++){
-                var t=((els[i].textContent||'')+'|'+(els[i].getAttribute('aria-label')||'')+'|'+(els[i].getAttribute('title')||'')+'|'+(els[i].getAttribute('data-name')||'')).trim();
-                if(/ndic/i.test(t)) out.push(t.slice(0,120));
-              }
-              return out.join(' ;; ');
-            })()""")
-            log("indikatori-dugmad: %s" % (dump or "nista"))
-        except Exception as e:
-            log("dijagnostika dugmadi preskocena: %s" % str(e)[:100])
-        # 1. dugme Indicators - klik kroz JS da ne zavisi od vidljivosti
-        opened = False
-        try:
-            clicked = page.evaluate("""(function(){
-              var els=document.querySelectorAll('button,[data-name],[aria-label]');
-              for(var i=0;i<els.length;i++){
-                var t=((els[i].textContent||'')+' '+(els[i].getAttribute('aria-label')||'')+' '+(els[i].getAttribute('title')||'')+' '+(els[i].getAttribute('data-name')||''));
-                if(/indicators|indikatori/i.test(t)){
-                  try{els[i].click();return 'klik:'+t.slice(0,80);}catch(e){return 'greska-klik';}
-                }
-              }
-              return '';
-            })()""")
-            if clicked and clicked.startswith("klik:"):
-                opened = True
-                log("indicators dugme kliknuto: %s" % clicked)
-        except Exception as e:
-            log("js klik nije uspeo: %s" % str(e)[:100])
-        if not opened:
-            for sel in ['button:has-text("Indicators")',
-                        '[aria-label="Indicators"]',
-                        'button:has-text("Indikatori")']:
-                try:
-                    page.click(sel, timeout=8000)
-                    opened = True
-                    log("indicators dugme kliknuto: %s" % sel)
-                    break
-                except Exception:
-                    continue
-        if not opened:
-            log("nisam nasao Indicators dugme")
-            return False
-        time.sleep(2)
-        # 2. search polje
-        searched = False
-        for sel in ['input[placeholder*="Search"]',
-                    'input[placeholder*="search"]',
-                    'input[type="text"]']:
-            try:
-                page.fill(sel, INDICATOR_NAME, timeout=8000)
-                searched = True
-                log("pretraga ukucana")
-                break
-            except Exception:
-                continue
-        if not searched:
-            log("nisam nasao search polje")
-            try:
-                page.keyboard.press("Escape")
-            except Exception:
-                pass
-            return False
-        time.sleep(3)
-        # 3. klik na rezultat punom simulacijom misa (obicni klik TradingView ignorise).
-        # Prvo nadje red sa HP V2, popne se do celog reda, pa opali mousedown/mouseup/click na sredinu.
-        add_expr = """(function(){
-          var target=null;
-          var els=document.querySelectorAll('*');
-          for(var i=0;i<els.length;i++){
-            var t=(els[i].textContent||'').trim();
-            if(t.indexOf('Auto Harmonic Patterns - V2')===0 && els[i].children.length<=3){ target=els[i]; break; }
-          }
-          if(!target) return 'nije-nadjen-red';
-          var row=target;
-          for(var k=0;k<5;k++){
-            try{ var rr=row.getBoundingClientRect(); if(rr.width>250) break; }catch(e){ break; }
-            if(row.parentElement) row=row.parentElement; else break;
-          }
-          try{
-            var r=row.getBoundingClientRect();
-            var o={bubbles:true,cancelable:true,clientX:r.x+r.width/2,clientY:r.y+r.height/2};
-            ['mousedown','mouseup','click'].forEach(function(ev){ row.dispatchEvent(new MouseEvent(ev,o)); });
-            return 'kliknut-red:'+Math.round(r.width)+'x'+Math.round(r.height);
-          }catch(e){ return 'greska:'+String(e).slice(0,60); }
-        })()"""
-        try:
-            log("dodavanje: %s" % page.evaluate(add_expr))
-        except Exception as e:
-            log("dodavanje nije uspelo: %s" % str(e)[:100])
-        time.sleep(4)
-        # 4. zatvori prozor: prvo X dugme, pa Escape
-        try:
-            page.evaluate("""(function(){
-              var els=document.querySelectorAll('button');
-              for(var i=0;i<els.length;i++){
-                var t=(els[i].getAttribute('aria-label')||'');
-                if(t==='Close'||t==='Zatvori'){
-                  try{ var r=els[i].getBoundingClientRect();
-                    if(r.width>5&&r.width<60&&r.height>5&&r.height<60){ els[i].click(); return; } }catch(e){}
-                }
-              }
-            })()""")
-        except Exception:
-            pass
-        for _ in range(3):
-            try:
-                page.keyboard.press("Escape")
-            except Exception:
-                pass
-            time.sleep(1)
-        try:
-            log("prozor i dalje otvoren: %s" % page.evaluate(
-                "document.body.innerText.indexOf('Indicators, metrics, and strategies')>=0"))
-            log("indikator na chartu (legenda): %s" % page.evaluate(
-                """(function(){
-                  var legs=document.querySelectorAll('[data-name="legend"]');
-                  var t=''; for(var i=0;i<legs.length;i++){ t+=legs[i].innerText+' '; }
-                  if(t) return t.indexOf('Harmonic')>=0;
-                  return document.body.innerText.indexOf('HP - V2')>=0;
-                })()"""))
-        except Exception:
-            pass
-        return True
-    except Exception as e:
-        log("dodavanje indikatora nije uspelo: %s" % str(e)[:150])
-        return False
+        url = page.url
+        if "/accounts/signin" in url or "login" in url.split("?")[0]:
+            return True
+        txt = page.evaluate("document.body ? document.body.innerText.slice(0,2000) : ''")
+        if "Sign in" in txt and "Password" in txt and "TradingView" in txt:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def main():
     from playwright.sync_api import sync_playwright
 
+    token = os.environ.get("TELEGRAM_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    sid = os.environ.get("TV_SESSIONID", "").strip()
+    sign = os.environ.get("TV_SESSIONID_SIGN", "").strip()
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True, args=[
             "--no-sandbox", "--disable-dev-shm-usage"])
-        page = browser.new_page(viewport={"width": 1280, "height": 720})
-        log("otvaram: %s" % CHART_URL)
-        page.goto(CHART_URL, wait_until="domcontentloaded", timeout=60000)
+        ctx = browser.new_context(viewport={"width": 1280, "height": 720})
+        cookies = []
+        if sid:
+            cookies.append({"name": "sessionid", "value": sid,
+                            "domain": ".tradingview.com", "path": "/"})
+        if sign:
+            cookies.append({"name": "sessionid_sign", "value": sign,
+                            "domain": ".tradingview.com", "path": "/"})
+        if cookies:
+            ctx.add_cookies(cookies)
+            log("kolacici ucitani: %d" % len(cookies))
+        else:
+            log("NEMA kolacica - bez prijave HP V2 ne moze na chart")
+        page = ctx.new_page()
+        log("otvaram tvoj layout")
+        page.goto(LAYOUT_URL, wait_until="domcontentloaded", timeout=60000)
         try:
             page.wait_for_selector("canvas", timeout=60000)
             log("canvas nadjen")
@@ -214,8 +123,27 @@ def main():
         time.sleep(10)
         dismiss_popups(page)
         time.sleep(2)
-        ok = try_add_indicator(page)
-        log("indikator dodat: %s (inputs se steluju na kraju)" % ok)
+
+        if is_login_wall(page):
+            log("LOGIN ZID: kolacic istekao ili ne valja")
+            if token and chat_id:
+                send_text(token, chat_id,
+                          "TV cloud: prijava istekla, treba novi kolacic. "
+                          "Slike pauzirane dok se ne ubaci novi.")
+                log("poslato upozorenje na telegram")
+            browser.close()
+            return 0
+
+        try:
+            legend = page.evaluate(
+                """(function(){
+                  var legs=document.querySelectorAll('[data-name="legend"]');
+                  var t=''; for(var i=0;i<legs.length;i++){ t+=legs[i].innerText+' '; }
+                  return t.slice(0,200);
+                })()""")
+            log("legenda: %s" % (legend or "prazna"))
+        except Exception:
+            pass
         # HP V2 je tezak, ceka se da se iscrta
         time.sleep(25)
         dismiss_popups(page)
@@ -223,8 +151,6 @@ def main():
         log("slikano: %s" % OUT_PNG)
         browser.close()
 
-    token = os.environ.get("TELEGRAM_TOKEN", "").strip()
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     caption = "BTCUSDT 4H cloud %s" % stamp
     if token and chat_id:
