@@ -65,18 +65,49 @@ def try_add_indicator(page):
     """Pokusa da doda HP V2 preko Indicators menija. Ako ne uspe, vrati False
     pa se svejedno slika prazan chart (da korisnik vidi da sistem radi)."""
     try:
-        # 1. dugme Indicators
+        # Dijagnostika: ispisi dugmad koja lice na Indicators da vidimo pravi naziv
+        try:
+            dump = page.evaluate("""(function(){
+              var out=[];
+              var els=document.querySelectorAll('button,[aria-label],[title],[data-name]');
+              for(var i=0;i<els.length && out.length<20;i++){
+                var t=((els[i].textContent||'')+'|'+(els[i].getAttribute('aria-label')||'')+'|'+(els[i].getAttribute('title')||'')+'|'+(els[i].getAttribute('data-name')||'')).trim();
+                if(/ndic/i.test(t)) out.push(t.slice(0,120));
+              }
+              return out.join(' ;; ');
+            })()""")
+            log("indikatori-dugmad: %s" % (dump or "nista"))
+        except Exception as e:
+            log("dijagnostika dugmadi preskocena: %s" % str(e)[:100])
+        # 1. dugme Indicators - klik kroz JS da ne zavisi od vidljivosti
         opened = False
-        for sel in ['button:has-text("Indicators")',
-                    '[aria-label="Indicators"]',
-                    'button:has-text("Indikatori")']:
-            try:
-                page.click(sel, timeout=8000)
+        try:
+            clicked = page.evaluate("""(function(){
+              var els=document.querySelectorAll('button,[data-name],[aria-label]');
+              for(var i=0;i<els.length;i++){
+                var t=((els[i].textContent||'')+' '+(els[i].getAttribute('aria-label')||'')+' '+(els[i].getAttribute('title')||'')+' '+(els[i].getAttribute('data-name')||''));
+                if(/indicators|indikatori/i.test(t)){
+                  try{els[i].click();return 'klik:'+t.slice(0,80);}catch(e){return 'greska-klik';}
+                }
+              }
+              return '';
+            })()""")
+            if clicked and clicked.startswith("klik:"):
                 opened = True
-                log("indicators dugme kliknuto: %s" % sel)
-                break
-            except Exception:
-                continue
+                log("indicators dugme kliknuto: %s" % clicked)
+        except Exception as e:
+            log("js klik nije uspeo: %s" % str(e)[:100])
+        if not opened:
+            for sel in ['button:has-text("Indicators")',
+                        '[aria-label="Indicators"]',
+                        'button:has-text("Indikatori")']:
+                try:
+                    page.click(sel, timeout=8000)
+                    opened = True
+                    log("indicators dugme kliknuto: %s" % sel)
+                    break
+                except Exception:
+                    continue
         if not opened:
             log("nisam nasao Indicators dugme")
             return False
@@ -152,8 +183,8 @@ def main():
         log("slikano: %s" % OUT_PNG)
         browser.close()
 
-    token = os.environ.get("TELEGRAM_TOKEN", "")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    token = os.environ.get("TELEGRAM_TOKEN", "").strip()
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     caption = "BTCUSDT 4H cloud %s" % stamp
     if token and chat_id:
