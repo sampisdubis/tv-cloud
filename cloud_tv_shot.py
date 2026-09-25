@@ -132,30 +132,47 @@ def try_add_indicator(page):
                 pass
             return False
         time.sleep(3)
-        # 3. klik na rezultat - jednom selektuje red, drugi put ga dodaje na chart
-        click_row = """(function(){
+        # 3. klik na rezultat punom simulacijom misa (obicni klik TradingView ignorise).
+        # Prvo nadje red sa HP V2, popne se do celog reda, pa opali mousedown/mouseup/click na sredinu.
+        add_expr = """(function(){
+          var target=null;
           var els=document.querySelectorAll('*');
           for(var i=0;i<els.length;i++){
             var t=(els[i].textContent||'').trim();
-            if(t.indexOf('Auto Harmonic Patterns')===0 && els[i].children.length<=2){
-              try{els[i].click();return 'klik';}catch(e){return 'greska';}
-            }
+            if(t.indexOf('Auto Harmonic Patterns - V2')===0 && els[i].children.length<=3){ target=els[i]; break; }
           }
-          return '';
+          if(!target) return 'nije-nadjen-red';
+          var row=target;
+          for(var k=0;k<5;k++){
+            try{ var rr=row.getBoundingClientRect(); if(rr.width>250) break; }catch(e){ break; }
+            if(row.parentElement) row=row.parentElement; else break;
+          }
+          try{
+            var r=row.getBoundingClientRect();
+            var o={bubbles:true,cancelable:true,clientX:r.x+r.width/2,clientY:r.y+r.height/2};
+            ['mousedown','mouseup','click'].forEach(function(ev){ row.dispatchEvent(new MouseEvent(ev,o)); });
+            return 'kliknut-red:'+Math.round(r.width)+'x'+Math.round(r.height);
+          }catch(e){ return 'greska:'+String(e).slice(0,60); }
         })()"""
         try:
-            page.evaluate(click_row)
-            log("prvi klik na rezultat")
+            log("dodavanje: %s" % page.evaluate(add_expr))
         except Exception as e:
-            log("klik na rezultat nije uspeo: %s" % str(e)[:100])
-        time.sleep(2)
+            log("dodavanje nije uspelo: %s" % str(e)[:100])
+        time.sleep(4)
+        # 4. zatvori prozor: prvo X dugme, pa Escape
         try:
-            page.evaluate(click_row)
-            log("drugi klik na rezultat (dodavanje)")
-        except Exception as e:
-            log("drugi klik nije uspeo: %s" % str(e)[:100])
-        time.sleep(3)
-        # 4. zatvori prozor da ne prekriva chart
+            page.evaluate("""(function(){
+              var els=document.querySelectorAll('button');
+              for(var i=0;i<els.length;i++){
+                var t=(els[i].getAttribute('aria-label')||'');
+                if(t==='Close'||t==='Zatvori'){
+                  try{ var r=els[i].getBoundingClientRect();
+                    if(r.width>5&&r.width<60&&r.height>5&&r.height<60){ els[i].click(); return; } }catch(e){}
+                }
+              }
+            })()""")
+        except Exception:
+            pass
         for _ in range(3):
             try:
                 page.keyboard.press("Escape")
@@ -163,9 +180,15 @@ def try_add_indicator(page):
                 pass
             time.sleep(1)
         try:
-            still_open = page.evaluate(
-                "document.body.innerText.indexOf('Indicators, metrics, and strategies')>=0")
-            log("prozor i dalje otvoren: %s" % still_open)
+            log("prozor i dalje otvoren: %s" % page.evaluate(
+                "document.body.innerText.indexOf('Indicators, metrics, and strategies')>=0"))
+            log("indikator na chartu (legenda): %s" % page.evaluate(
+                """(function(){
+                  var legs=document.querySelectorAll('[data-name="legend"]');
+                  var t=''; for(var i=0;i<legs.length;i++){ t+=legs[i].innerText+' '; }
+                  if(t) return t.indexOf('Harmonic')>=0;
+                  return document.body.innerText.indexOf('HP - V2')>=0;
+                })()"""))
         except Exception:
             pass
         return True
