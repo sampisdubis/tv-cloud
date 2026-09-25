@@ -132,23 +132,40 @@ def try_add_indicator(page):
                 pass
             return False
         time.sleep(3)
-        # 3. klik na prvi rezultat koji sadrzi Harmonic
+        # 3. klik na rezultat - jednom selektuje red, drugi put ga dodaje na chart
+        click_row = """(function(){
+          var els=document.querySelectorAll('*');
+          for(var i=0;i<els.length;i++){
+            var t=(els[i].textContent||'').trim();
+            if(t.indexOf('Auto Harmonic Patterns')===0 && els[i].children.length<=2){
+              try{els[i].click();return 'klik';}catch(e){return 'greska';}
+            }
+          }
+          return '';
+        })()"""
         try:
-            page.evaluate("""(function(){
-              var els=document.querySelectorAll('*');
-              for(var i=0;i<els.length;i++){
-                var t=(els[i].textContent||'').trim();
-                if(t.indexOf('Auto Harmonic Patterns')===0 && els[i].children.length<=2){
-                  try{els[i].click();return;}catch(e){}
-                }
-              }
-            })()""")
-            log("kliknut rezultat pretrage")
+            page.evaluate(click_row)
+            log("prvi klik na rezultat")
         except Exception as e:
             log("klik na rezultat nije uspeo: %s" % str(e)[:100])
         time.sleep(2)
         try:
-            page.keyboard.press("Escape")
+            page.evaluate(click_row)
+            log("drugi klik na rezultat (dodavanje)")
+        except Exception as e:
+            log("drugi klik nije uspeo: %s" % str(e)[:100])
+        time.sleep(3)
+        # 4. zatvori prozor da ne prekriva chart
+        for _ in range(3):
+            try:
+                page.keyboard.press("Escape")
+            except Exception:
+                pass
+            time.sleep(1)
+        try:
+            still_open = page.evaluate(
+                "document.body.innerText.indexOf('Indicators, metrics, and strategies')>=0")
+            log("prozor i dalje otvoren: %s" % still_open)
         except Exception:
             pass
         return True
