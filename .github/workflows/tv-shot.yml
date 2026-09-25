@@ -8,7 +8,7 @@ on:
 jobs:
   shot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,5 +36,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tv-shot
-          path: tv_cloud.png
+          path: tv_cloud_*.png
           if-no-files-found: warn
