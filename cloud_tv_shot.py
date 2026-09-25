@@ -74,18 +74,29 @@ def dismiss_popups(page):
         log("popup dismiss preskocen: %s" % str(e)[:100])
 
 
-def is_login_wall(page):
-    """Proveri da li nas je TradingView bacio na prijavu (kolacic istekao)."""
+def login_state(page):
+    """Vraca (ima_sign_in_link, ima_user_meni) sa naslovne strane."""
     try:
-        url = page.url
-        if "/accounts/signin" in url or "login" in url.split("?")[0]:
-            return True
-        txt = page.evaluate("document.body ? document.body.innerText.slice(0,2000) : ''")
-        if "Sign in" in txt and "Password" in txt and "TradingView" in txt:
-            return True
+        return page.evaluate("""(function(){
+          var signLink = document.querySelector('a[href*="accounts/signin"]') !== null;
+          var um = document.querySelectorAll('button');
+          var userMenu = false;
+          for (var i=0;i<um.length;i++){
+            var a=(um[i].getAttribute('aria-label')||'');
+            if(/user menu|account|profile/i.test(a)){ userMenu = true; break; }
+          }
+          return [signLink, userMenu];
+        })()""")
     except Exception:
-        pass
-    return False
+        return [None, None]
+
+
+def layout_blocked_text(page):
+    try:
+        txt = page.evaluate("document.body ? document.body.innerText.slice(0,3000) : ''")
+    except Exception:
+        return ""
+    return txt
 
 
 def main():
@@ -113,23 +124,60 @@ def main():
         else:
             log("NEMA kolacica - bez prijave HP V2 ne moze na chart")
         page = ctx.new_page()
+        # 1. prvo naslovna strana da sesija legne, pa provera prijave
+        log("otvaram naslovnu za proveru prijave")
+        page.goto("https://www.tradingview.com/", wait_until="domcontentloaded", timeout=60000)
+        time.sleep(6)
+        sign_link, user_menu = login_state(page)
+        logged_in = (user_menu is True) or (sign_link is False)
+        log("prijava prepoznata: %s (sign_link=%s user_menu=%s)" % (logged_in, sign_link, user_menu))
+        if not logged_in:
+            log("KOLACIC NE VALJA: nisi ulogovan ni na naslovnoj")
+            if token and chat_id:
+                send_text(token, chat_id,
+                          "TV cloud: kolacic ne valja (prijava nije prosla). "
+                          "Izvadi nova 2 kljuca iz browsera i zameni tajne sifre.")
+                log("poslato upozorenje na telegram")
+            browser.close()
+            return 0
+        # 2. tvoj sacuvani layout
         log("otvaram tvoj layout")
         page.goto(LAYOUT_URL, wait_until="domcontentloaded", timeout=60000)
+        canvas_ok = True
         try:
             page.wait_for_selector("canvas", timeout=60000)
             log("canvas nadjen")
         except Exception:
-            log("canvas nije nadjen na vreme, nastavljam svejedno")
-        time.sleep(10)
+            canvas_ok = False
+            log("canvas nije nadjen na vreme")
+        time.sleep(8)
         dismiss_popups(page)
         time.sleep(2)
 
-        if is_login_wall(page):
-            log("LOGIN ZID: kolacic istekao ili ne valja")
+        body = layout_blocked_text(page)
+        blocked = "Can't open this chart layout" in body
+        if blocked or not canvas_ok:
+            log("layout problem (blocked=%s canvas_ok=%s) - jedan reload pa ponovo" % (blocked, canvas_ok))
+            try:
+                page.reload(wait_until="domcontentloaded", timeout=60000)
+            except Exception:
+                pass
+            time.sleep(10)
+            dismiss_popups(page)
+            try:
+                page.wait_for_selector("canvas", timeout=60)
+                canvas_ok = True
+            except Exception:
+                canvas_ok = False
+            body = layout_blocked_text(page)
+            blocked = "Can't open this chart layout" in body
+        if blocked or not canvas_ok:
+            log("CHART NE RADI: blocked=%s canvas_ok=%s" % (blocked, canvas_ok))
             if token and chat_id:
-                send_text(token, chat_id,
-                          "TV cloud: prijava istekla, treba novi kolacic. "
-                          "Slike pauzirane dok se ne ubaci novi.")
+                reason = ("tvoj sacuvani chart se ne otvara (obrisan ili preimenovan?)"
+                          if blocked else
+                          "chart se nije ucitao (prazna strana)")
+                send_text(token, chat_id, "TV cloud: " + reason)
                 log("poslato upozorenje na telegram")
             browser.close()
             return 0
