@@ -195,7 +195,11 @@ def main():
 
     token = os.environ.get("TELEGRAM_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    try:
+        from zoneinfo import ZoneInfo
+        stamp = datetime.datetime.now(ZoneInfo("Europe/Belgrade")).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     if token and chat_id:
         for tf_name, tf_val, out in shots:
             if ok_map.get(tf_name):
