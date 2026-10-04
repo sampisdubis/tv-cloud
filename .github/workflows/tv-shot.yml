@@ -40,3 +40,4 @@ jobs:
           name: tv-shot
           path: tv_cloud_*.png
           if-no-files-found: warn
+          retention-days: 2
